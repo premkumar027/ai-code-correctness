@@ -27,12 +27,16 @@ with col3:
 
 selected_models = st.multiselect("Select Models", get_model_names(), default='deepseek-v4-pro')
 
-# --- Prompt Preview ---
+# --- Prompt (editable) ---
 task = TASKS[task_name]
-prompt = build_prompt(style=style, language=language, **task)
+base_prompt = build_prompt(style=style, language=language, **task)
 
-with st.expander("Preview Prompt"):
-    st.text(prompt)
+prompt = st.text_area(
+    "Prompt (editable)",
+    value=base_prompt,
+    height=200,
+    key=f"prompt_{task_name}_{language}_{style}",
+)
 
 # --- Initialize session state ---
 if "results" not in st.session_state:

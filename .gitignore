@@ -9,7 +9,53 @@ wheels/
 # Virtual environments
 .venv
 .env
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
 
+# Virtual environments
+.venv
+.env
+
+# Results (large, regeneratable)
+results/raw/
+
+# Lean build files
+lean_workspace/build/
+lean_workspace/.lake/
+
+# OS files
+.DS_Store
+
+# Extra Files
+roadmap.md# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+.env
+
+# Results (large, regeneratable)
+results/raw/
+
+# Lean build files
+lean_workspace/build/
+lean_workspace/.lake/
+
+# OS files
+.DS_Store
+
+# Extra Files
+roadmap.md
 # Results (large, regeneratable)
 results/raw/
 

@@ -28,21 +28,21 @@ MODEL_CONFIGS = {
         'api_key':os.getenv("ANTHROPIC_API_KEY")
         },
 
-    'gemini-3.1-pro':{
-        'provider':'google', 
-        'model_name':'gemini-3.1-pro-preview', 
+    'gemini-2.5-flash':{
+        'provider':'google',
+        'model_name':'gemini-2.5-flash',
         'api_key':os.getenv("GOOGLE_AI_API_KEY")
         },
 
-    'gemini-3-flash': {
+    'gemini-3.5-flash': {
         'provider': 'google',
-        'model_name': 'gemini-3-flash-preview',
+        'model_name': 'gemini-3.5-flash',
         'api_key': os.getenv("GOOGLE_AI_API_KEY")
         },
 
     'gemma-4-27b':{
-        'provider':'google', 
-        'model_name':'gemma-4-27b-it', 
+        'provider':'google',
+        'model_name':'gemma-4-27b-it',
         'api_key': os.getenv("GOOGLE_AI_API_KEY")
         },
 

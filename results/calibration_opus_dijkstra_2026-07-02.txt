@@ -1,0 +1,29 @@
+
+=== style=naive ===
+  attempt 1: in=32 out=1433  0/0 tests  fail
+  attempt 2: in=429 out=857  0/10 tests  fail
+  attempt 3: in=2283 out=1163  9/10 tests  fail
+  attempt 4: in=1366 out=1125  10/10 tests  PASS
+
+=== style=structured ===
+  attempt 1: in=150 out=696  9/10 tests  fail
+  attempt 2: in=1099 out=662  10/10 tests  PASS
+
+=== style=chain_of_thought ===
+  attempt 1: in=71 out=1881  0/0 tests  fail
+  attempt 2: in=502 out=807  0/10 tests  fail
+  attempt 3: in=2272 out=773  10/10 tests  PASS
+
+============================================================
+MEASURED (claude-opus-4-7, dijkstra, 3 combos / 9 calls)
+============================================================
+  total tokens        : 8,204 in / 9,397 out
+  avg attempts/combo  : 3.00
+  avg tokens/combo    : 2,735 in / 3,132 out
+  cost these 3 combos : $0.2759
+
+PROJECTION (using this task's per-combo token profile):
+  [Python only]  Opus 4.7: $2.76   Sonnet 4.6: $1.66   both: $4.42
+  [Python + Lean]  Opus 4.7: $5.52   Sonnet 4.6: $3.31   both: $8.83
+
+Anthropic credit: EUR 2.84 = ~$3.07

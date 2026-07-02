@@ -56,3 +56,28 @@ MODEL_CONFIGS = {
 
 def get_model_names() -> list[str]:
     return list(MODEL_CONFIGS.keys())
+
+
+# Price in USD per 1,000,000 tokens, as (input, output), keyed by the model
+# config name above. Anthropic values are current list prices. The others are
+# PLACEHOLDERS — replace them with the real per-model pricing so cost logging is
+# accurate. A model missing here logs tokens but a NULL cost (never crashes).
+PRICING = {
+    'gpt-5.5':           (1.25, 10.0),   # PLACEHOLDER — update
+    'gpt-5.4-mini':      (0.25,  2.0),   # PLACEHOLDER — update
+    'claude-opus-4-7':   (5.0,  25.0),
+    'claude-sonnet-4-6': (3.0,  15.0),
+    'gemini-2.5-flash':  (0.30,  2.5),   # PLACEHOLDER — update
+    'gemini-3.5-flash':  (0.30,  2.5),   # PLACEHOLDER — update
+    'gemma-4-27b':       (0.0,   0.0),   # PLACEHOLDER — often free tier
+    'deepseek-v4-pro':   (0.28,  0.42),  # PLACEHOLDER — update
+}
+
+
+def estimate_cost(model_name: str, input_tokens: int, output_tokens: int) -> float | None:
+    """USD cost of a single call, or None if the model's pricing is unknown."""
+    price = PRICING.get(model_name)
+    if not price:
+        return None
+    price_in, price_out = price
+    return (input_tokens / 1_000_000) * price_in + (output_tokens / 1_000_000) * price_out

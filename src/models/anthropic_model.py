@@ -1,6 +1,6 @@
 from time import time
 from langchain_anthropic import ChatAnthropic
-from src.models.base import BaseModel, ModelResponse
+from src.models.base import BaseModel, ModelResponse, extract_usage
 
 class AnthropicModel(BaseModel):
     """Wrapper for Anthropic models (Claude Opus, Sonnet)."""
@@ -15,12 +15,15 @@ class AnthropicModel(BaseModel):
             start = time()
             result = self.llm.invoke(prompt)
             elapsed = time() - start
+            in_tok, out_tok = extract_usage(result)
 
             return ModelResponse(
                 model_name=self.model_name,
                 prompt = prompt,
                 response = result.content,
-                response_time = elapsed
+                response_time = elapsed,
+                input_tokens=in_tok,
+                output_tokens=out_tok,
             )
         
         except Exception as e:

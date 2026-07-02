@@ -60,6 +60,8 @@ if st.button("Generate from the Selected Models"):
                 response=result.response,
                 response_time=result.response_time,
                 error=result.error,
+                input_tokens=result.input_tokens,
+                output_tokens=result.output_tokens,
             )
 
             st.session_state.results[model_name] = {
@@ -141,6 +143,8 @@ if st.session_state.results:
                                 parent_run_id=data["parent_run_id"],
                                 attempt_number=attempt_num + 1,
                                 feedback_given=feedback,
+                                input_tokens=new_result.input_tokens,
+                                output_tokens=new_result.output_tokens,
                             )
 
                             data["attempts"].append((new_result, new_run_id))

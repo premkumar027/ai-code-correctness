@@ -11,8 +11,14 @@ MODEL_CONFIGS = {
         },
 
     'gpt-5.4-mini':{
-        'provider':'openai', 
-        'model_name':'gpt-5.4-mini', 
+        'provider':'openai',
+        'model_name':'gpt-5.4-mini',
+        'api_key':os.getenv("OPENAI_API_KEY")
+        },
+
+    'gpt-5.4':{
+        'provider':'openai',
+        'model_name':'gpt-5.4',
         'api_key':os.getenv("OPENAI_API_KEY")
         },
 
@@ -63,14 +69,15 @@ def get_model_names() -> list[str]:
 # PLACEHOLDERS — replace them with the real per-model pricing so cost logging is
 # accurate. A model missing here logs tokens but a NULL cost (never crashes).
 PRICING = {
-    'gpt-5.5':           (1.25, 10.0),   # PLACEHOLDER — update
-    'gpt-5.4-mini':      (0.25,  2.0),   # PLACEHOLDER — update
+    'gpt-5.5':           (5.0,  30.0),   # OpenAI list price (2026-07)
+    'gpt-5.4':           (2.5,  15.0),   # OpenAI list price (2026-07) — Sonnet-tier
+    'gpt-5.4-mini':      (0.75,  4.5),   # OpenAI list price (2026-07)
     'claude-opus-4-7':   (5.0,  25.0),
     'claude-sonnet-4-6': (3.0,  15.0),
     'gemini-2.5-flash':  (0.30,  2.5),   # PLACEHOLDER — update
     'gemini-3.5-flash':  (0.30,  2.5),   # PLACEHOLDER — update
     'gemma-4-27b':       (0.0,   0.0),   # PLACEHOLDER — often free tier
-    'deepseek-v4-pro':   (0.28,  0.42),  # PLACEHOLDER — update
+    'deepseek-v4-pro':   (0.435, 0.87),  # DeepSeek steady-state, cache-miss (2026-07)
 }
 
 

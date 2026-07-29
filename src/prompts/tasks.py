@@ -369,3 +369,122 @@ TASKS = {
 # lean_only tasks have no Python test folder and are skipped in Python runs.
 IMPOSSIBLE_TASKS = {k for k, v in TASKS.items() if not v.get("expected_provable", True)}
 LEAN_ONLY_TASKS = {k for k, v in TASKS.items() if v.get("lean_only", False)}
+
+
+# ---------------------------------------------------------------------------
+# Public API contract per task, transcribed from tasks/<task>/reference.py and the
+# fixtures in tasks/<task>/conftest.py.
+#
+# Why this exists: the hidden human suite calls the generated code by name. Without
+# a stated contract the model has to guess the API, and 39 of 93 attempt-1 runs in
+# the original Python arm collected 0 tests purely from name mismatches — measuring
+# API guessing, not correctness. Only names, argument order and return shapes are
+# given; the algorithm itself is never described here.
+# ---------------------------------------------------------------------------
+
+PYTHON_INTERFACES = {
+    "dijkstra": "def dijkstra(graph: dict, source: str) -> dict\n"
+                "    # graph maps node -> dict of {neighbour: edge_weight}\n"
+                "    # returns a dict mapping each reachable node -> shortest distance from source",
+
+    "bfs": "def bfs(graph: dict, source: str) -> list\n"
+           "    # graph maps node -> list of neighbours\n"
+           "    # returns the visited nodes in BFS order",
+
+    "merge_sort": "def merge(left: list, right: list) -> list\n"
+                  "def merge_sort(lst: list) -> list\n"
+                  "    # both must be defined separately at module level",
+
+    "binary_search": "def binary_search(lst: list, target: int) -> int\n"
+                     "    # returns the index of target in the sorted list, or -1 if absent",
+
+    "prefix_suffix_split": "def prefix_suffix_split(word: str) -> list[tuple[str, str]]\n"
+                           "    # returns every (prefix, suffix) pair whose concatenation is word",
+
+    "prefix_closed_create": "def is_prefix_closed(S) -> bool\n"
+                            "def prefix_closure(S) -> set\n"
+                            "    # S is a set of strings; both take and return plain sets of strings",
+
+    "prefix_closed_minimal": "def prefix_closure(S) -> set\n"
+                             "    # S is a set of strings; returns a set of strings",
+
+    "prefix_closed_concat": "def prefix_concat(S1, S2) -> set\n"
+                            "    # S1, S2 are sets of strings; returns a set of strings",
+
+    "suffix_closed_create": "def is_suffix_closed(E) -> bool\n"
+                            "def suffix_closure(E) -> set\n"
+                            "    # E is a set of strings; both take and return plain sets of strings",
+
+    "suffix_closed_minimal": "def suffix_closure(E) -> set\n"
+                             "    # E is a set of strings; returns a set of strings",
+
+    "suffix_closed_concat": "def suffix_concat(E1, E2) -> set\n"
+                            "    # E1, E2 are sets of strings; returns a set of strings",
+
+    # ---- L* observation-table family ----
+    # Shared conventions: S and E are sets of strings, A is the alphabet (a set of
+    # single-character strings), and oracle(word) -> 1 if the word is in the target
+    # language else 0. A "row" is a tuple of oracle answers. Inputs are always
+    # re-iterable containers, never one-shot generators.
+    "obs_table_oracle": "def make_oracle(accepted) -> callable\n"
+                        "    # accepted is a set of strings\n"
+                        "    # returns oracle(word) -> 1 if word in accepted else 0",
+
+    "obs_table_build": "def row(s, E, oracle) -> tuple\n"
+                       "    # one oracle answer per experiment, ordered by sorted(E)\n"
+                       "def build_table(S, E, A, oracle) -> dict\n"
+                       "    # maps every string in S and in S.A (s + a) to its row",
+
+    "obs_table_closed": "def row(s, E, oracle) -> tuple\n"
+                        "    # one oracle answer per experiment, ordered by sorted(E)\n"
+                        "def is_closed(S, E, A, oracle) -> tuple\n"
+                        "    # (True, None) if closed, else (False, t) for a violating t in S.A\n"
+                        "def close_table(S, E, A, oracle) -> set\n"
+                        "    # returns the extended S that makes the table closed",
+
+    "obs_table_consistent": "def row(s, E, oracle) -> tuple\n"
+                            "    # one oracle answer per experiment, ordered by sorted(E)\n"
+                            "def is_consistent(S, E, A, oracle) -> tuple\n"
+                            "    # (True, None) if consistent, else (False, (s1, s2, a, e)) witnessing failure\n"
+                            "def make_consistent(S, E, A, oracle) -> set\n"
+                            "    # returns the extended E that makes the table consistent",
+
+    # The three dfa tasks share one API but are graded on different properties.
+    "obs_table_dfa_build": "def build_dfa(S, E, A, oracle) -> dict\n"
+                           "    # states are row tuples (one oracle answer per experiment, ordered by sorted(E))\n"
+                           "    # returns {'states': set, 'start': row of \"\", 'accept': set,\n"
+                           "    #          'delta': {(row, a): row}, 'alphabet': set}",
+
+    "obs_table_dfa_behavior": "def build_dfa(S, E, A, oracle) -> dict\n"
+                              "    # states are row tuples (one oracle answer per experiment, ordered by sorted(E))\n"
+                              "    # returns {'states': set, 'start': row of \"\", 'accept': set,\n"
+                              "    #          'delta': {(row, a): row}, 'alphabet': set}",
+
+    "obs_table_dfa_sublanguage": "def build_dfa(S, E, A, oracle) -> dict\n"
+                                 "    # states are row tuples (one oracle answer per experiment, ordered by sorted(E))\n"
+                                 "    # returns {'states': set, 'start': row of \"\", 'accept': set,\n"
+                                 "    #          'delta': {(row, a): row}, 'alphabet': set}",
+}
+
+
+# The L* tasks share their input conventions. These belong in the prompt, not in a
+# source comment: the hidden suite calls the generated code with exactly these
+# types, so a model that reasonably assumes a list of experiments — or writes a
+# test using a one-shot generator — is penalised for our vague wording rather than
+# for its own work. The pilot caught exactly that: a model tested prefix_concat
+# with generators, which the contract permitted and reference.py does not support.
+_TABLE_CONVENTIONS = (
+    "# S and E are sets of strings ('' is the empty string), A is a set of\n"
+    "# single-character strings, and oracle(word) -> 1 if word is in the target\n"
+    "# language else 0. Inputs are always re-iterable containers, never generators.\n"
+)
+
+for _task in (
+    "obs_table_build",
+    "obs_table_closed",
+    "obs_table_consistent",
+    "obs_table_dfa_build",
+    "obs_table_dfa_behavior",
+    "obs_table_dfa_sublanguage",
+):
+    PYTHON_INTERFACES[_task] = _TABLE_CONVENTIONS + PYTHON_INTERFACES[_task]

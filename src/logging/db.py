@@ -59,6 +59,29 @@ def get_connection():
         )
     """)
 
+    # Python self-tests arm only. In that arm total_tests/tests_passed hold the
+    # model's OWN tests (the primary pass criterion, mirroring "compiles && no
+    # sorry"); the columns below hold the three independent measurements:
+    #   hidden_*    - the human suite in tasks/*/ = ground-truth correctness.
+    #                 Scored silently, never shown to the model.
+    #   ref_tests_* - the model's tests run against the known-correct reference.
+    #                 A failure here means the test itself is wrong.
+    #   mutants_*   - pooled real defects its tests catch = test strength.
+    #                 Escaped mutants are the analogue of a vacuous theorem.
+    for column, coltype in (
+        ("hidden_total", "INTEGER"),
+        ("hidden_passed", "INTEGER"),
+        ("ref_tests_total", "INTEGER"),
+        ("ref_tests_passed", "INTEGER"),
+        ("mutants_total", "INTEGER"),
+        ("mutants_caught", "INTEGER"),
+    ):
+        try:
+            conn.execute(f"ALTER TABLE evaluations ADD COLUMN {column} {coltype}")
+            conn.commit()
+        except Exception:
+            pass  # column already exists
+
     # Human-judged (manual) metrics, filled in during a review pass — NOT by the
     # orchestrator. Scores are nullable so partial annotation is fine.
     conn.execute("""
@@ -122,16 +145,22 @@ def save_run(model_name, task_name, language, prompt_style, prompt_text,
 
 
 def save_evaluation(run_id, total_tests=0, tests_passed=0, compiles=None,
-                    sorry_count=None, uses_mathlib=None, notes=""):
+                    sorry_count=None, uses_mathlib=None, notes="",
+                    hidden_total=None, hidden_passed=None,
+                    ref_tests_total=None, ref_tests_passed=None,
+                    mutants_total=None, mutants_caught=None):
     conn = get_connection()
     conn.execute(
         """
         INSERT INTO evaluations (run_id, total_tests, tests_passed,
-            compiles, sorry_count, uses_mathlib, notes)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+            compiles, sorry_count, uses_mathlib, notes,
+            hidden_total, hidden_passed, ref_tests_total, ref_tests_passed,
+            mutants_total, mutants_caught)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (run_id, total_tests, tests_passed, compiles, sorry_count,
-         uses_mathlib, notes),
+         uses_mathlib, notes, hidden_total, hidden_passed,
+         ref_tests_total, ref_tests_passed, mutants_total, mutants_caught),
     )
     conn.commit()
     conn.close()

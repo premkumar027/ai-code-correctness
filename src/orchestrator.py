@@ -31,14 +31,27 @@ if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
 from src.config import MODEL_CONFIGS, get_model_names
+from src.evaluation import mutation
+from src.evaluation.extract import (
+    IMPL_MARK as _IMPL_MARK,
+    TEST_MARK as _TEST_MARK,
+    extract_code,
+    extract_impl_and_tests,
+    extract_lean_code,
+)
 from src.evaluation.python_runner import run as run_python_tests
+from src.evaluation.python_runner import run_pair as run_python_pair
 from src.evaluation.lean_runner import run as run_lean_tests
 from src.logging.db import save_evaluation, save_run
 from src.models import get_model
-from src.prompts.tasks import TASKS
-from src.prompts.templates import build_prompt
+from src.prompts.tasks import PYTHON_INTERFACES, TASKS
+from src.prompts.templates import build_prompt, build_self_test_prompt
 
 MAX_ATTEMPTS = 5
+
+# Stored in runs.language to keep this arm separate from the original Python arm.
+# Existing analysis filters on language == 'Python' and is unaffected by these rows.
+SELF_TEST_LANGUAGE = "Python (self-tests)"
 RATE_LIMIT_BACKOFF = 60   # initial sleep on 429, doubles each retry
 MAX_BACKOFF = 300
 
@@ -62,30 +75,50 @@ class ComboResult:
     language: str = "Python"
     library: str | None = None
     sorry_count: int = 0
+    # Self-tests arm: own tests are the pass criterion; these are the independent
+    # measurements the model never sees.
+    hidden_passed: bool = False
+    hidden_count: int = 0
+    hidden_total: int = 0
+    ref_tests_ok: bool = False
+    mutants_caught: int = 0
+    mutants_total: int = 0
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def extract_code(response: str) -> str:
-    """Return the last Python code block, or the raw response if none found."""
-    blocks = re.findall(r"```(?:python)?\n(.*?)```", response, re.DOTALL)
-    if blocks:
-        return blocks[-1].strip()
-    return response.strip()
+def build_self_test_feedback_prompt(
+    original_prompt: str, impl: str, tests: str, error_message: str
+) -> str:
+    """Feedback for the self-tests arm.
+
+    Deliberately derived ONLY from the model's own tests. The hidden human suite
+    is never quoted here — leaking it would hand the model the ground-truth spec
+    and recreate the very confound this arm exists to remove.
+    """
+    return (
+        f"Here is the original task:\n\n{original_prompt}\n\n"
+        f"Here is your previous implementation:\n\n```python\n{impl}\n```\n\n"
+        f"Here are your previous tests:\n\n```python\n{tests}\n```\n\n"
+        f"Running your tests against your implementation produced this feedback:\n\n"
+        f"{error_message}\n\n"
+        "Fix whichever is wrong — the implementation, the tests, or both. Return both "
+        "code blocks again in the same format (a block marked "
+        f"`# {_IMPL_MARK}` then a block marked `# {_TEST_MARK}`), no explanations."
+    )
 
 
-def extract_lean_code(response: str) -> str:
-    """Return the last lean/lean4 code block, or the raw response if none found."""
-    blocks = re.findall(r"```(?:lean4?)\n(.*?)```", response, re.DOTALL)
-    if blocks:
-        return blocks[-1].strip()
-    # fall back to any fenced code block
-    blocks = re.findall(r"```[^\n]*\n(.*?)```", response, re.DOTALL)
-    if blocks:
-        return blocks[-1].strip()
-    return response.strip()
+def build_format_retry_prompt(original_prompt: str, missing: str) -> str:
+    """Re-ask for the two-block format without giving any task help."""
+    return (
+        f"{original_prompt}\n\n"
+        f"Your previous answer could not be parsed: {missing}. Return exactly two "
+        f"Python code blocks — the first marked `# {_IMPL_MARK}`, the second marked "
+        f"`# {_TEST_MARK}` and importing the implementation with "
+        "`from solution import ...`. No other text."
+    )
 
 
 def build_feedback_prompt(original_prompt: str, code: str, error_message: str) -> str:
@@ -137,10 +170,15 @@ def run_combo(
     task_name: str,
     style: str,
     dry_run: bool = False,
+    with_interface: bool = False,
 ) -> ComboResult:
 
     task = TASKS[task_name]
-    original_prompt = build_prompt(style=style, language="Python", **task)
+    original_prompt = build_prompt(
+        style=style, language="Python",
+        interface=PYTHON_INTERFACES.get(task_name) if with_interface else None,
+        **task,
+    )
 
     if dry_run:
         print("    [dry-run] skipped")
@@ -221,6 +259,158 @@ def run_combo(
         passed=False, final_attempt=MAX_ATTEMPTS,
         passed_count=result.passed_count,   # type: ignore[possibly-unbound]
         total_tests=result.total,           # type: ignore[possibly-unbound]
+    )
+
+
+# ---------------------------------------------------------------------------
+# Single Python self-tests combo
+#
+# The model authors the implementation AND its own tests, mirroring the Lean arm
+# (implementation + theorem + proof). Pass criterion = its own tests pass, the
+# analogue of "compiles && no sorry". Three things are measured silently:
+#   hidden  - the human suite = ground-truth correctness. The gap between this and
+#             the pass criterion is the headline number of the whole comparison.
+#   ref     - its tests run against the known-correct reference: do they even hold
+#             for a correct implementation, or are the assertions themselves wrong?
+#   mutants - real defects its tests catch = test strength, the counterpart of
+#             asking whether a proved theorem is vacuous.
+# None of the three ever enters the feedback loop.
+# ---------------------------------------------------------------------------
+
+def run_self_test_combo(
+    model_name: str,
+    task_name: str,
+    style: str,
+    dry_run: bool = False,
+) -> ComboResult:
+
+    task = {k: v for k, v in TASKS[task_name].items() if k != "lean_property"}
+    original_prompt = build_self_test_prompt(
+        style=style, interface=PYTHON_INTERFACES[task_name], **task
+    )
+
+    if dry_run:
+        print("    [dry-run] skipped")
+        return ComboResult(
+            model_name, task_name, style, False, 0,
+            skipped=True, language=SELF_TEST_LANGUAGE,
+        )
+
+    reference_code = (Path("tasks") / task_name / "reference.py").read_text(encoding="utf-8")
+
+    current_prompt = original_prompt
+    parent_run_id: int | None = None
+    last_feedback: str | None = None
+    own = None
+
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        print(f"    attempt {attempt}/{MAX_ATTEMPTS} ...", end=" ", flush=True)
+
+        response = _generate_with_retry(model_name, current_prompt)
+
+        run_id = save_run(
+            model_name=model_name,
+            task_name=task_name,
+            language=SELF_TEST_LANGUAGE,
+            prompt_style=style,
+            prompt_text=current_prompt,
+            response=response.response,
+            response_time=response.response_time,
+            error=response.error,
+            parent_run_id=parent_run_id,
+            attempt_number=attempt,
+            feedback_given=last_feedback,
+            input_tokens=response.input_tokens,
+            output_tokens=response.output_tokens,
+        )
+        if attempt == 1:
+            parent_run_id = run_id
+
+        if response.error:
+            print(f"API ERROR: {response.error[:80]}")
+            save_evaluation(run_id, compiles=0, notes=f"API error: {response.error}")
+            return ComboResult(
+                model_name, task_name, style,
+                passed=False, final_attempt=attempt,
+                api_error=response.error, language=SELF_TEST_LANGUAGE,
+            )
+
+        impl, tests = extract_impl_and_tests(response.response)
+        if not impl or not tests:
+            missing = "no implementation block found" if not impl else "no test block found"
+            print(f"unparseable ({missing})")
+            save_evaluation(run_id, compiles=0, notes=f"Format error: {missing}")
+            if attempt < MAX_ATTEMPTS:
+                last_feedback = missing
+                current_prompt = build_format_retry_prompt(original_prompt, missing)
+                continue
+            return ComboResult(
+                model_name, task_name, style,
+                passed=False, final_attempt=attempt, language=SELF_TEST_LANGUAGE,
+            )
+
+        # 1. Primary criterion: the model's tests against the model's code.
+        own = run_python_pair(impl, tests)
+        # 2. Ground truth, scored silently.
+        hidden = run_python_tests(impl, task_name)
+        # 3. Are the tests themselves valid? Same suite, correct implementation.
+        ref = run_python_pair(reference_code, tests)
+        # 4. Test strength. Only on an artifact that counts — a passing attempt or
+        #    the last one — since each score costs one pytest run per mutant.
+        mut = mutation.MutationScore()
+        if own.passed or attempt == MAX_ATTEMPTS:
+            mut = mutation.score(task_name, tests)
+
+        save_evaluation(
+            run_id=run_id,
+            total_tests=own.total,
+            tests_passed=own.passed_count,
+            compiles=1 if own.total > 0 else 0,
+            hidden_total=hidden.total,
+            hidden_passed=hidden.passed_count,
+            ref_tests_total=ref.total,
+            ref_tests_passed=ref.passed_count,
+            mutants_total=mut.total or None,
+            mutants_caught=mut.caught if mut.total else None,
+            notes=own.error_message,
+        )
+
+        summary = (
+            f"own {own.passed_count}/{own.total}, "
+            f"hidden {hidden.passed_count}/{hidden.total}, "
+            f"ref {ref.passed_count}/{ref.total}"
+        )
+        if mut.total:
+            summary += f", {mut}"
+
+        if own.passed:
+            verdict = "PASSED" if hidden.passed else "PASSED (self) / FAILED hidden"
+            print(f"{verdict} ({summary})")
+            return ComboResult(
+                model_name, task_name, style,
+                passed=True, final_attempt=attempt,
+                passed_count=own.passed_count, total_tests=own.total,
+                language=SELF_TEST_LANGUAGE,
+                hidden_passed=hidden.passed,
+                hidden_count=hidden.passed_count, hidden_total=hidden.total,
+                ref_tests_ok=ref.passed,
+                mutants_caught=mut.caught, mutants_total=mut.total,
+            )
+
+        print(f"failed ({summary})")
+
+        if attempt < MAX_ATTEMPTS:
+            last_feedback = own.error_message
+            current_prompt = build_self_test_feedback_prompt(
+                original_prompt, impl, tests, own.error_message
+            )
+
+    return ComboResult(
+        model_name, task_name, style,
+        passed=False, final_attempt=MAX_ATTEMPTS,
+        passed_count=own.passed_count if own else 0,
+        total_tests=own.total if own else 0,
+        language=SELF_TEST_LANGUAGE,
     )
 
 
@@ -391,6 +581,31 @@ def _print_summary(results: list[ComboResult]) -> None:
             avg_sorry = sum(r.sorry_count for r in sub) / len(sub)
             print(f"{lib:<12} {p:>5} {len(sub):>7} {p/len(sub)*100:>6.0f}% {avg_sorry:>9.1f}")
 
+    # Self-tests arm: the interesting number is not the pass rate but the gap
+    # between "passes its own tests" and "is actually correct".
+    self_tested = [r for r in total if r.language == SELF_TEST_LANGUAGE]
+    if self_tested:
+        print()
+        print("MODEL-AUTHORED TESTS (self-consistency vs ground truth)")
+        print(f"{'Model':<26} {'SelfOK':>7} {'TrueOK':>7} {'Gap':>5} {'ValidTests':>11} {'Mut':>7}")
+        print("-" * 68)
+        for m in sorted({r.model for r in self_tested}):
+            sub = [r for r in self_tested if r.model == m]
+            self_ok = sum(1 for r in sub if r.passed)
+            true_ok = sum(1 for r in sub if r.hidden_passed)
+            valid = sum(1 for r in sub if r.ref_tests_ok)
+            scored = [r for r in sub if r.mutants_total]
+            caught = sum(r.mutants_caught for r in scored)
+            pool = sum(r.mutants_total for r in scored)
+            mut = f"{caught / pool * 100:.0f}%" if pool else "n/a"
+            print(f"{m:<26} {self_ok:>7} {true_ok:>7} {self_ok - true_ok:>5} "
+                  f"{valid:>11} {mut:>7}")
+        print("  SelfOK     = passed its own tests (analogue of: compiled, no sorry)")
+        print("  TrueOK     = passed the hidden human suite (ground-truth correctness)")
+        print("  Gap        = believed itself correct but was not")
+        print("  ValidTests = its tests also hold on the reference implementation")
+        print("  Mut        = share of real seeded defects its tests caught")
+
     # Impossible theorems: interpretation is INVERTED — a clean proof is a red flag.
     impossible = [
         r for r in total
@@ -449,6 +664,18 @@ def _parse_args():
         help="Lean library to make available: none (default), mathlib, cslib",
     )
     parser.add_argument(
+        "--self-tests", action="store_true", dest="self_tests",
+        help="Python arm where the MODEL writes the tests too (mirrors the Lean arm). "
+             "The human suite is scored silently as ground truth and never fed back.",
+    )
+    parser.add_argument(
+        "--with-interface", action="store_true", dest="with_interface",
+        help="Given-tests Python arm only: state the required API in the prompt. "
+             "The existing 93 combos were collected WITHOUT this, so enabling it "
+             "means that arm must be re-run to stay comparable. Always on for "
+             "--self-tests, where the hidden suite needs a known API to call.",
+    )
+    parser.add_argument(
         "--dry-run", action="store_true",
         help="Print what would run without making any API calls.",
     )
@@ -475,9 +702,23 @@ def main() -> None:
     if bad_styles:
         sys.exit(f"Unknown style(s): {bad_styles}. Valid: {_VALID_STYLES}")
 
+    if args.self_tests and language == "lean":
+        sys.exit("--self-tests applies to the Python arm only (drop --language lean).")
+    if args.self_tests:
+        missing = [t for t in tasks if t not in PYTHON_INTERFACES]
+        if missing:
+            sys.exit(
+                f"No API contract defined for {missing}. Lean-only tasks have no "
+                "Python counterpart; add an entry to PYTHON_INTERFACES for anything else."
+            )
+
     total_combos = len(models) * len(tasks) * len(styles)
     mode = "DRY RUN — no API calls" if args.dry_run else "LIVE"
-    lang_label = f"Lean 4 [{library}]" if language == "lean" else "Python"
+    lang_label = (
+        f"Lean 4 [{library}]" if language == "lean"
+        else "Python [model-authored tests]" if args.self_tests
+        else "Python [given tests]" + (" +interface" if args.with_interface else "")
+    )
     print(f"[{mode}] {total_combos} combos "
           f"({len(models)} models × {len(tasks)} tasks × {len(styles)} styles) "
           f"[{lang_label}]")
@@ -505,9 +746,14 @@ def main() -> None:
                         model_name, task_name, style,
                         library=library, dry_run=args.dry_run,
                     )
+                elif args.self_tests:
+                    result = run_self_test_combo(
+                        model_name, task_name, style, dry_run=args.dry_run
+                    )
                 else:
                     result = run_combo(
-                        model_name, task_name, style, dry_run=args.dry_run
+                        model_name, task_name, style, dry_run=args.dry_run,
+                        with_interface=args.with_interface,
                     )
                 all_results.append(result)
 

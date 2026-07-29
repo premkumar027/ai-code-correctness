@@ -14,6 +14,27 @@ wheels/
 results/*.db
 results/raw/
 
+# Mutation-testing mutant pools: derived deterministically from tasks/*/reference.py.
+# Rebuild with `uv run python -m src.evaluation.mutation` (no API cost).
+results/mutants/
+
+# Run logs from the orchestrator and pool builds
+logs/
+
+# Exported model responses for manual review: ~1800 files / 13 MB, regenerated
+# from experiments.db by analysis/export_responses.py. The review VERDICTS in
+# analysis/verification_v2.csv are hand-written and ARE tracked.
+analysis/responses/
+
+# Test/tool caches
+.pytest_cache/
+
+# LibreOffice lock files (appear while a .csv is open in Calc)
+.~lock.*#
+
+# Machine-local Claude Code settings
+.claude/settings.local.json
+
 # Lean build artifacts and fetched dependencies (huge — Mathlib oleans, etc.)
 # Matches .lake at any depth (lean_workspace/mathlib/.lake, cslib/.lake, ...).
 .lake/
@@ -24,3 +45,7 @@ results/raw/
 
 # Notes
 roadmap.md
+
+# Lean scratch file: src/evaluation/lean_runner.py overwrites this per run with
+# the model's generated code, so its committed contents are meaningless churn.
+lean_workspace/*/LLMSolution.lean
